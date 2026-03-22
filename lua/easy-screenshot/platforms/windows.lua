@@ -17,12 +17,17 @@ end
 ---@param temp_dir string Directory for the script file
 ---@param callback function Callback(exit_code, stdout, stderr)
 local function run_ps(ps_code, temp_dir, callback)
-  local script_file = (temp_dir or vim.fn.tempname()) .. "/ps_" .. math.random(1000, 9999) .. ".ps1"
+  local dir = temp_dir or vim.fn.fnamemodify(vim.fn.tempname(), ":h")
+  vim.fn.mkdir(dir, "p")
+  local script_file = dir .. "/ps_" .. math.random(1000, 9999) .. ".ps1"
   local f = io.open(script_file, "w")
   if not f then
     callback(1, "", "Failed to write PowerShell script to " .. script_file)
     return
   end
+  -- Force UTF-8 output so Japanese (and other non-ASCII) window titles are
+  -- not mangled by the default CP932/Shift-JIS console encoding.
+  f:write "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8\n"
   f:write(ps_code)
   f:close()
 
@@ -79,12 +84,20 @@ namespace Win32Util {
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PrintWindow(IntPtr hWnd, IntPtr hdcBlt, uint nFlags);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
+
         [DllImport("dwmapi.dll")]
         public static extern int DwmGetWindowAttribute(IntPtr hWnd, uint dwAttribute, out RECT lpRect, int cbAttribute);
 
         public const uint DWMWA_EXTENDED_FRAME_BOUNDS = 0x09;
 
-        public static RECT GetWindowRect(IntPtr hWnd) {
+        public static RECT GetDwmWindowRect(IntPtr hWnd) {
             RECT rect = new RECT();
             DwmGetWindowAttribute(hWnd, DWMWA_EXTENDED_FRAME_BOUNDS, out rect, Marshal.SizeOf(typeof(RECT)));
             return rect;
@@ -120,21 +133,21 @@ function M.list_windows(callback)
     .. [[
 $windows = [Win32Util.WinApi]::GetVisibleWindows()
 foreach ($hWnd in $windows) {
-    $pid = 0
-    [Win32Util.WinApi]::GetWindowThreadProcessId($hWnd, [ref]$pid) | Out-Null
+    $wpid = 0
+    [Win32Util.WinApi]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
     $title = [Win32Util.WinApi]::GetWindowTitle($hWnd)
     try {
-        $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName
+        $proc = (Get-Process -Id $wpid -ErrorAction SilentlyContinue).ProcessName
     } catch {
         $proc = "unknown"
     }
     if ($proc -and $title) {
-        Write-Output "$pid`t$proc`t$hWnd`t$title"
+        Write-Output "$wpid`t$proc`t$hWnd`t$title"
     }
 }
 ]]
 
-  run_ps(ps_code, vim.fn.tempname(), function(exit_code, stdout, stderr)
+  run_ps(ps_code, vim.fn.fnamemodify(vim.fn.tempname(), ":h"), function(exit_code, stdout, stderr)
     if exit_code ~= 0 then
       callback(false, "PowerShell failed: " .. stderr)
       return
@@ -144,6 +157,9 @@ foreach ($hWnd in $windows) {
     for line in stdout:gmatch "[^\r\n]+" do
       local pid, proc, hwnd, title = line:match "^(%d+)\t([^\t]+)\t([^\t]+)\t(.+)$"
       if pid then
+        -- Strip zero-width characters (U+200B, U+200C, U+200D, U+FEFF) that
+        -- apps like Edge embed in window titles.
+        title = vim.fn.substitute(title, "[\\u200b\\u200c\\u200d\\ufeff]", "", "g")
         table.insert(windows, {
           id = hwnd,
           pid = pid,
@@ -168,22 +184,59 @@ function M.capture(opts, callback)
   local ps_path = capture_path:gsub("\\", "\\\\")
 
   local ps_code
-  if opts.process then
-    -- Capture a specific process window by process name
+  if opts.hwnd then
+    -- Capture by exact window handle (from picker)
     ps_code = WIN32_TYPES
       .. string.format(
         [[
 Start-Sleep -Milliseconds %d
+
+Add-Type -AssemblyName System.Drawing
+
+$targetHWnd = [IntPtr]::new(%s)
+
+$rect = New-Object Win32Util.RECT
+[Win32Util.WinApi]::GetWindowRect($targetHWnd, [ref]$rect) | Out-Null
+$w = $rect.Right - $rect.Left
+$h = $rect.Bottom - $rect.Top
+
+if ($w -le 0 -or $h -le 0) {
+    Write-Error "Invalid window dimensions: ${w}x${h}"
+    exit 1
+}
+
+$bmp = New-Object System.Drawing.Bitmap $w, $h
+$graphics = [Drawing.Graphics]::FromImage($bmp)
+$hdc = $graphics.GetHdc()
+# PW_RENDERFULLCONTENT = 2 captures DWM-composed content
+[Win32Util.WinApi]::PrintWindow($targetHWnd, $hdc, 2) | Out-Null
+$graphics.ReleaseHdc($hdc)
+$bmp.Save("%s")
+$graphics.Dispose()
+$bmp.Dispose()
+]],
+        math.floor(opts.capture_delay * 1000),
+        opts.hwnd,
+        ps_path
+      )
+  elseif opts.process then
+    -- Capture by process name (fallback)
+    ps_code = WIN32_TYPES
+      .. string.format(
+        [[
+Start-Sleep -Milliseconds %d
+
+Add-Type -AssemblyName System.Drawing
 
 $targetName = "%s"
 $targetHWnd = [IntPtr]::Zero
 
 $windows = [Win32Util.WinApi]::GetVisibleWindows()
 foreach ($hWnd in $windows) {
-    $pid = 0
-    [Win32Util.WinApi]::GetWindowThreadProcessId($hWnd, [ref]$pid) | Out-Null
+    $wpid = 0
+    [Win32Util.WinApi]::GetWindowThreadProcessId($hWnd, [ref]$wpid) | Out-Null
     try {
-        $proc = (Get-Process -Id $pid -ErrorAction SilentlyContinue).ProcessName
+        $proc = (Get-Process -Id $wpid -ErrorAction SilentlyContinue).ProcessName
     } catch {
         continue
     }
@@ -198,14 +251,16 @@ if ($targetHWnd -eq [IntPtr]::Zero) {
     exit 1
 }
 
-$rect = [Win32Util.WinApi]::GetWindowRect($targetHWnd)
+$rect = New-Object Win32Util.RECT
+[Win32Util.WinApi]::GetWindowRect($targetHWnd, [ref]$rect) | Out-Null
+$w = $rect.Right - $rect.Left
+$h = $rect.Bottom - $rect.Top
 
-Add-Type -AssemblyName System.Windows.Forms,System.Drawing
-
-$bounds   = [Drawing.Rectangle]::FromLTRB($rect.Left, $rect.Top, $rect.Right, $rect.Bottom)
-$bmp      = New-Object System.Drawing.Bitmap ([int]$bounds.Width), ([int]$bounds.Height)
+$bmp = New-Object System.Drawing.Bitmap $w, $h
 $graphics = [Drawing.Graphics]::FromImage($bmp)
-$graphics.CopyFromScreen($bounds.Location, [Drawing.Point]::Empty, $bounds.Size)
+$hdc = $graphics.GetHdc()
+[Win32Util.WinApi]::PrintWindow($targetHWnd, $hdc, 2) | Out-Null
+$graphics.ReleaseHdc($hdc)
 $bmp.Save("%s")
 $graphics.Dispose()
 $bmp.Dispose()
@@ -222,7 +277,7 @@ $bmp.Dispose()
 Start-Sleep -Milliseconds %d
 
 $hwnd = [Win32Util.WinApi]::GetForegroundWindow()
-$rect = [Win32Util.WinApi]::GetWindowRect($hwnd)
+$rect = [Win32Util.WinApi]::GetDwmWindowRect($hwnd)
 
 Add-Type -AssemblyName System.Windows.Forms,System.Drawing
 
@@ -263,7 +318,7 @@ $image.Dispose()
     win_path
   )
 
-  run_ps(ps_code, vim.fn.tempname(), function(exit_code, stdout, stderr)
+  run_ps(ps_code, vim.fn.fnamemodify(vim.fn.tempname(), ":h"), function(exit_code, stdout, stderr)
     if exit_code == 0 then
       callback(true)
     else

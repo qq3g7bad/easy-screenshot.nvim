@@ -92,36 +92,22 @@ function M.paste_with_imgclip(temp_filepath, imgclip_opts, callback)
     return
   end
 
-  -- Copy temp file to clipboard (platform-specific)
-  local platform = require "easy-screenshot.platforms"
-  platform.copy_to_clipboard(temp_filepath, function(success, error_msg)
-    if not success then
-      M.delete_file(temp_filepath)
-      callback(false, "Failed to copy to clipboard: " .. (error_msg or "Unknown error"))
-      return
-    end
-
-    -- Small delay to ensure clipboard is ready
-    vim.defer_fn(function()
-      -- Trigger img-clip paste with optional overrides
-      local paste_ok, paste_err = pcall(function()
-        if imgclip_opts and next(imgclip_opts) then
-          imgclip.paste_image(imgclip_opts)
-        else
-          vim.cmd "PasteImage"
-        end
-      end)
-
-      -- Clean up temp file
-      M.delete_file(temp_filepath)
-
-      if paste_ok then
-        callback(true, "Screenshot pasted")
-      else
-        callback(false, "img-clip paste failed: " .. tostring(paste_err))
-      end
-    end, 100)
+  -- Pass the file path directly to img-clip instead of going through the clipboard.
+  -- This avoids clipboard cross-platform issues (e.g. WSL Windows clipboard vs Linux clipboard).
+  -- Force copy_images so img-clip copies the temp file to the destination before we delete it.
+  local opts = vim.tbl_deep_extend("force", { copy_images = true }, imgclip_opts or {})
+  local paste_ok, paste_err = pcall(function()
+    imgclip.paste_image(opts, temp_filepath)
   end)
+
+  -- Clean up temp file
+  M.delete_file(temp_filepath)
+
+  if paste_ok then
+    callback(true, "Screenshot pasted")
+  else
+    callback(false, "img-clip paste failed: " .. tostring(paste_err))
+  end
 end
 
 return M

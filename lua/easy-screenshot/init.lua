@@ -171,7 +171,7 @@ function M.select_and_capture()
     end)
 
     local on_select = function(window)
-      M.capture { process = window.process }
+      M.capture { process = window.process, hwnd = window.id }
     end
 
     local picker = M.config.picker or "auto"
@@ -229,7 +229,8 @@ function M.list_windows(opts)
       table.insert(lines, string.format("%-20s %-10s %-15s %s", "PROCESS", "PID", "WINDOW_ID", "TITLE"))
       table.insert(lines, string.rep("-", 100))
       for _, win in ipairs(result) do
-        local line = string.format("%-20s %-10s %-15s %s", win.process, win.pid, win.id, win.title:sub(1, 50))
+        local line =
+          string.format("%-20s %-10s %-15s %s", win.process, win.pid, win.id, vim.fn.strcharpart(win.title, 0, 50))
         table.insert(lines, line)
       end
     else
@@ -252,7 +253,9 @@ function M.list_windows(opts)
       table.insert(lines, string.rep("-", 80))
       for _, proc in ipairs(proc_names) do
         local count = #processes[proc]
-        local example = processes[proc][1]:sub(1, 40)
+        local title = processes[proc][1]
+        local title_charlen = vim.fn.strchars(title)
+        local example = vim.fn.strcharpart(title, 0, 40)
         table.insert(
           lines,
           string.format(
@@ -261,7 +264,7 @@ function M.list_windows(opts)
             count,
             count > 1 and "s" or "",
             example,
-            #processes[proc][1] > 40 and "..." or ""
+            title_charlen > 40 and "..." or ""
           )
         )
       end
