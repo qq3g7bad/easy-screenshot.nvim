@@ -23,6 +23,11 @@ end
 function M.capture(opts)
   opts = opts or {}
 
+  if vim.bo.filetype ~= "markdown" then
+    vim.notify("easy-screenshot.nvim: current file is not a Markdown file", vim.log.levels.WARN)
+    return
+  end
+
   if not M.config or not M.config.capture_delay then
     vim.notify("easy-screenshot.nvim not configured. Call setup() first.", vim.log.levels.ERROR)
     return
@@ -141,6 +146,11 @@ end
 
 --- Show a picker of windows and capture the selected one
 function M.select_and_capture()
+  if vim.bo.filetype ~= "markdown" then
+    vim.notify("easy-screenshot.nvim: current file is not a Markdown file", vim.log.levels.WARN)
+    return
+  end
+
   if not M.config or not M.config.capture_delay then
     vim.notify("easy-screenshot.nvim not configured. Call setup() first.", vim.log.levels.ERROR)
     return
