@@ -16,12 +16,6 @@ function M.file_exists(filepath)
   return stat ~= nil and stat.type == "file"
 end
 
---- Delete a file
----@param filepath string
-function M.delete_file(filepath)
-  vim.loop.fs_unlink(filepath)
-end
-
 --- Execute a shell command asynchronously
 ---@param cmd string Command to execute
 ---@param args table|nil Arguments
