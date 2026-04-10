@@ -92,6 +92,10 @@ namespace Win32Util {
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetProcessDPIAware();
+
         [DllImport("dwmapi.dll")]
         public static extern int DwmGetWindowAttribute(IntPtr hWnd, uint dwAttribute, out RECT lpRect, int cbAttribute);
 
@@ -191,6 +195,7 @@ function M.capture(opts, callback)
         [[
 Start-Sleep -Milliseconds %d
 
+[Win32Util.WinApi]::SetProcessDPIAware() | Out-Null
 Add-Type -AssemblyName System.Drawing
 
 $targetHWnd = [IntPtr]::new(%s)
@@ -226,6 +231,7 @@ $bmp.Dispose()
         [[
 Start-Sleep -Milliseconds %d
 
+[Win32Util.WinApi]::SetProcessDPIAware() | Out-Null
 Add-Type -AssemblyName System.Drawing
 
 $targetName = "%s"
@@ -256,6 +262,11 @@ $rect = New-Object Win32Util.RECT
 $w = $rect.Right - $rect.Left
 $h = $rect.Bottom - $rect.Top
 
+if ($w -le 0 -or $h -le 0) {
+    Write-Error "Invalid window dimensions: ${w}x${h}"
+    exit 1
+}
+
 $bmp = New-Object System.Drawing.Bitmap $w, $h
 $graphics = [Drawing.Graphics]::FromImage($bmp)
 $hdc = $graphics.GetHdc()
@@ -275,6 +286,8 @@ $bmp.Dispose()
       .. string.format(
         [[
 Start-Sleep -Milliseconds %d
+
+[Win32Util.WinApi]::SetProcessDPIAware() | Out-Null
 
 $hwnd = [Win32Util.WinApi]::GetForegroundWindow()
 $rect = [Win32Util.WinApi]::GetDwmWindowRect($hwnd)
