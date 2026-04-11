@@ -6,14 +6,14 @@ local utils = require "easy-screenshot.utils"
 ---@return string
 local function to_win_path(path)
   if vim.fn.has "wsl" == 1 then
-    if path:match("^/mnt/(%a)") then
+    if path:match "^/mnt/(%a)" then
       -- /mnt/<drive>/... -> <DRIVE>:\...
       local win = path:gsub("^/mnt/(%a)", "%1:")
       return win:gsub("/", "\\")
     else
       -- Linux filesystem path -> UNC path so that powershell.exe can
       -- resolve it regardless of the current working directory.
-      local distro = os.getenv("WSL_DISTRO_NAME") or "Ubuntu"
+      local distro = os.getenv "WSL_DISTRO_NAME" or "Ubuntu"
       return "\\\\wsl.localhost\\" .. distro .. path:gsub("/", "\\")
     end
   end
